@@ -149,10 +149,10 @@ STAT_LEAVES = (
 #      344.7 那张卡只算出 241.3；
 #   v2 sqrt(场次) + ln(K/D)：低估高胜率低场次号，69 场 81% 胜真实 113.2 只算出 43.8；
 #   v3 现在这版：场次取对数、胜率线性、K/D 取对数加 0.1 平滑，七个样本都对得上。
-_DREAM_BASE = -115.55
-_DREAM_LNG_W = 31.46
-_DREAM_WR_W = 138.98
-_DREAM_LNKD_W = 49.69
+_DREAM_BASE = -115.37
+_DREAM_LNG_W = 31.48
+_DREAM_WR_W = 138.75
+_DREAM_LNKD_W = 49.67
 _DREAM_KD_EPS = 0.1
 _DREAM_KD_CAP = 30.0
 _DREAM_MIN_GAME = 10

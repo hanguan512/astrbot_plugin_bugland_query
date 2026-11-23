@@ -75,5 +75,16 @@
     "final_deaths": 358,
     "bed_lose": 2026,
     "score": 366.2
+  },
+  {
+    "name": "通宵",
+    "game": 3200,
+    "win": 1265,
+    "kills": 9497,
+    "deaths": 6880,
+    "final_kills": 4731,
+    "final_deaths": 1796,
+    "bed_lose": 1304,
+    "score": 213.9
   }
 ]
