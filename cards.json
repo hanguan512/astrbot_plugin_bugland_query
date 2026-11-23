@@ -86,5 +86,16 @@
     "final_deaths": 1796,
     "bed_lose": 1304,
     "score": 213.9
+  },
+  {
+    "name": "戴瑟薇艾佩",
+    "game": 16961,
+    "win": 14789,
+    "kills": 147444,
+    "deaths": 13246,
+    "final_kills": 140059,
+    "final_deaths": 1387,
+    "bed_lose": 10370,
+    "score": 419.8
   }
 ]

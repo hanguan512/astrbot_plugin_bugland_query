@@ -9,7 +9,7 @@ cards.json 每条就是一张真实幻梦卡的原始数字：
      "deaths": 10296, "score": 344.7}
 
 模型结构（和 main._dream_rating 一致）：
-    评分 = base + lng_w * ln(场次) + wr_w * 胜率 + lnkd_w * ln(K/D + eps)
+    评分 = base + lng_w*ln(场次) + wr_w*胜率 + lnkd_w*ln(K/D+eps) + kdlin*K/D
 
 只用三个特征，样本内和留一误差都在 2 分内。换结构前先看这里，
 之前的「ln(K/D)」和「场次饱和 + 二次惩罚」版本都被真实卡推翻过。
@@ -27,7 +27,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EPS = 0.1        # ln(K/D + eps) 的平滑项，网格搜过 0.05~0.5，0.1 最优
-KD_CAP = 30.0    # K/D 封顶，防止 0 死号把分数拉爆
+KD_CAP = 20.0    # K/D 封顶，防止 0 死号把分数拉爆
 
 
 def features(card: dict) -> list[float]:
@@ -37,7 +37,7 @@ def features(card: dict) -> list[float]:
     deaths = float(card.get("deaths") or 0)
     winrate = min(max(win / game, 0.0), 1.0) if game else 0.0
     kd = min(kills / deaths if deaths > 0 else kills, KD_CAP)
-    return [1.0, math.log(game), winrate, math.log(kd + EPS)]
+    return [1.0, math.log(game), winrate, math.log(kd + EPS), kd]
 
 
 def fit(X: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -54,7 +54,7 @@ def main() -> None:
     pred = X @ w
 
     print("拟合权重:")
-    for name, v in zip(("base", "ln(game)", "winrate", "ln(kd+eps)"), w):
+    for name, v in zip(("base", "ln(game)", "winrate", "ln(kd+eps)", "kd"), w):
         print(f"  {name:12s} {v:9.2f}")
     print("\n样本内:")
     for c, p in zip(cards, pred):
@@ -72,7 +72,7 @@ def main() -> None:
     if "--apply" in sys.argv:
         mp = os.path.join(HERE, "main.py")
         src = open(mp, encoding="utf-8-sig").read()
-        names = ("_DREAM_BASE", "_DREAM_LNG_W", "_DREAM_WR_W", "_DREAM_LNKD_W")
+        names = ("_DREAM_BASE", "_DREAM_LNG_W", "_DREAM_WR_W", "_DREAM_LNKD_W", "_DREAM_KD_LIN")
         for name, v in zip(names, w):
             src = re.sub(rf"{name} = [-\d.]+", f"{name} = {v:.2f}", src)
         open(mp, "w", encoding="utf-8-sig").write(src)
