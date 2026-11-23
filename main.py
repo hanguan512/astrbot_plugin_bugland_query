@@ -140,12 +140,29 @@ STAT_LEAVES = (
 
 
 # ------------------------------------------------------------------ 幻梦评分
-# 说明：幻梦（第三方起床数据卡）并未公开算法，这套系数是用 11 个真实评分卡
-# 逆向拟合出来的，样本内 RMSE 0.71 分、留一交叉验证 5.53 分，只作参考。
-# 分数 ≈ 34.26 + 149.85*(1-e^(-场次/5500)) + 21.80*ln(K/D+0.1)
-#        + 102.03*胜率² + 84.66*场均终结 − 3.85*K/D²
-#        − 65.02*破床比² − 15.58*(K/D × 场均终结)
-_DREAM_K = 5500.0
+# 幻梦（第三方起床数据卡）没有公开算法，这套是按真实评分卡拟合的估算式，只作参考。
+# v2 修了 v1 的几个结构性问题：
+#   1) 字段名写错（bed_destory 不存在，接口给的是 bed_lose），破床项一直恒等于 0；
+#   2) K/D 用 -3.85*kd² 二次惩罚，kd 超过 2 就开始掉分，kd=8 直接 -150 分；
+#   3) deaths=0 时 K/D 取 kills，1000 杀 0 死会被算成 -385 万；
+#   4) 样本量不收缩，1 场 1 胜能打到 86 分，比 100 场 50% 胜 K/D1.0（60 分）还高；
+#   5) 场次项 k=5500 太钝，100 场只值 2.7 分。
+# 现在：特征先按先验做贝叶斯收缩（伪计数 24），再线性加权，全部单调有界，
+# 场次 <10 直接不评，返回空串由调用方标「样本不足」。
+_DREAM_PRIOR_N = 24.0
+_DREAM_PRIOR_WR = 0.35
+_DREAM_PRIOR_KD = 1.20
+_DREAM_PRIOR_AF = 0.12
+_DREAM_PRIOR_BD = 0.15
+_DREAM_MIN_GAME = 10
+
+_DREAM_BASE = 45.0
+_DREAM_VOL_W = 18.0
+_DREAM_VOL_SCALE = 40.0
+_DREAM_WR_W = 130.0
+_DREAM_KD_W = 34.0
+_DREAM_AF_W = 130.0
+_DREAM_BD_W = 45.0
 
 # (分数下限, 等级)，从高到低匹配。
 # 130 分以上是官方公示的档位，以下按档宽推算。
@@ -174,38 +191,44 @@ def _dream_level(score: float) -> str:
     return "F"
 
 
+def _shrink(total: float, game: float, prior: float) -> float:
+    """向先验收缩，场次越少越接近 prior，避免小样本刷分。"""
+    return (total + _DREAM_PRIOR_N * prior) / (game + _DREAM_PRIOR_N)
+
+
 def _dream_rating(stats: dict) -> float | None:
-    """按幻梦口径估算评分，数据不足时返回 None。"""
+    """按幻梦口径估算评分，场次不足或数据异常时返回 None。"""
     try:
         game = float(stats.get("game") or 0)
         win = float(stats.get("win") or 0)
         kills = float(stats.get("kills") or 0)
         deaths = float(stats.get("deaths") or 0)
         final_kills = float(stats.get("final_kills") or 0)
-        bed = float(stats.get("bed_destory") or 0)
+        bed = float(stats.get("bed_lose") or 0)
     except (TypeError, ValueError):
         return None
-    if game <= 0:
+    if game < _DREAM_MIN_GAME:
         return None
-    winrate = win / game
-    kd = kills / deaths if deaths > 0 else kills
-    avg_final = final_kills / game
-    bed_ratio = bed / game
+
+    winrate = _shrink(win, game, _DREAM_PRIOR_WR)
+    kd = (kills + _DREAM_PRIOR_N * _DREAM_PRIOR_KD) / (deaths + _DREAM_PRIOR_N)
+    kd = min(kd, 60.0)
+    avg_final = _shrink(final_kills, game, _DREAM_PRIOR_AF)
+    bed_ratio = _shrink(bed, game, _DREAM_PRIOR_BD)
+
     score = (
-        34.26
-        + 149.85 * (1.0 - math.exp(-game / _DREAM_K))
-        + 21.80 * math.log(kd + 0.1)
-        + 102.03 * winrate**2
-        + 84.66 * avg_final
-        - 3.85 * kd * kd
-        - 65.02 * bed_ratio**2
-        - 15.58 * kd * avg_final
+        _DREAM_BASE
+        + _DREAM_VOL_W * math.log1p(game / _DREAM_VOL_SCALE)
+        + _DREAM_WR_W * (winrate - _DREAM_PRIOR_WR)
+        + _DREAM_KD_W * math.log(kd / _DREAM_PRIOR_KD)
+        + _DREAM_AF_W * (avg_final - _DREAM_PRIOR_AF)
+        + _DREAM_BD_W * (bed_ratio - _DREAM_PRIOR_BD)
     )
     return score
 
 
 def _dream_tag(stats: dict) -> str:
-    """返回形如 178.9(A) 的标签。"""
+    """返回形如 178.9(A) 的标签；样本不足返回空串。"""
     score = _dream_rating(stats)
     if score is None:
         return ""
@@ -213,15 +236,25 @@ def _dream_tag(stats: dict) -> str:
 
 
 def _dream_aggregate(split: list[tuple[str, dict]]) -> str:
-    """把各细分模式累加成整体评分（对应幻梦卡上那个总分）。"""
-    total: dict[str, float] = {}
+    """整体评分：按场次加权平均各细分模式的评分，样本不足的模式不参与。"""
+    total_score = 0.0
+    total_game = 0.0
     for _, stats in split:
-        for key in ("game", "win", "kills", "deaths", "final_kills", "bed_destory"):
-            try:
-                total[key] = total.get(key, 0.0) + float(stats.get(key) or 0)
-            except (TypeError, ValueError):
-                continue
-    return _dream_tag(total)
+        score = _dream_rating(stats)
+        if score is None:
+            continue
+        try:
+            game = float(stats.get("game") or 0)
+        except (TypeError, ValueError):
+            continue
+        if game <= 0:
+            continue
+        total_score += score * game
+        total_game += game
+    if total_game <= 0:
+        return ""
+    score = total_score / total_game
+    return f"{score:.1f}({_dream_level(score)})"
 
 
 def _submode_label(gametype: str, key: str) -> str:
@@ -280,6 +313,8 @@ def _submode_blocks(label: str, stats: dict) -> list[dict]:
     tag = _dream_tag(stats)
     if tag:
         rows.append({"label": "幻梦评分", "value": tag})
+    elif game and int(game) < _DREAM_MIN_GAME:
+        rows.append({"label": "幻梦评分", "value": "样本不足，不评"})
     for key, lab in (
         ("kills", "击杀"),
         ("deaths", "死亡"),
@@ -318,7 +353,7 @@ def _submode_text(split: list[tuple[str, dict]]) -> list[str]:
         tag = _dream_tag(stats)
         seg = [
             f"【{label}】场次{game} 胜{win} 胜率{rate}",
-            f"K/D {kills}/{deaths}≈{kd}" + (f" 幻梦评分{tag}" if tag else ""),
+            f"K/D {kills}/{deaths}≈{kd}" + (f" 幻梦评分{tag}" if tag else f" 幻梦评分样本不足（{game}场）"),
         ]
         if "final_kills" in stats or "final_deaths" in stats:
             seg.append(
