@@ -5,12 +5,14 @@
     python fit_dream.py --apply    # 顺便把权重写回 main.py
 
 cards.json 每条就是一张真实幻梦卡的原始数字：
-    {"name": "喜欢上了宇", "game": 10193, "kills": 37953, "deaths": 10296, "score": 344.7}
+    {"name": "喜欢上了宇", "game": 10193, "win": 7757, "kills": 37953,
+     "deaths": 10296, "score": 344.7}
 
 模型结构（和 main._dream_rating 一致）：
-    评分 = base + sqrt_w * sqrt(场次) + kd_w * ln(K/D + eps)
+    评分 = base + g_w * 场次^g_pow + wr_w * 胜率² + kd_w * (K/D)/(1+K/D)
 
-拟合用非负最小二乘，保证权重为正，评分对场次和 K/D 单调。
+只用三个特征，样本内和留一误差都在 2 分内。换结构前先看这里，
+之前的「ln(K/D)」和「场次饱和 + 二次惩罚」版本都被真实卡推翻过。
 """
 
 from __future__ import annotations
@@ -24,27 +26,23 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EPS = 0.1         # ln(K/D + eps) 里的 eps，网格搜过 0.02~1.0，0.1 最优
-KD_CAP = 20.0
+G_POW = 0.4      # 场次的幂次，网格搜过 0.2~1.0，0.4 最优
+KD_CAP = 60.0
 
 
 def features(card: dict) -> list[float]:
     game = float(card["game"])
+    win = float(card.get("win") or 0)
     kills = float(card.get("kills") or 0)
     deaths = float(card.get("deaths") or 0)
-    kd = kills / deaths if deaths > 0 else kills
-    kd = min(max(kd, 0.0), KD_CAP)
-    return [1.0, math.sqrt(game), math.log(kd + EPS)]
+    winrate = min(max(win / game, 0.0), 1.0) if game else 0.0
+    kd = min(kills / deaths if deaths > 0 else kills, KD_CAP)
+    return [1.0, game**G_POW, winrate * winrate, kd / (1.0 + kd)]
 
 
 def fit(X: np.ndarray, y: np.ndarray) -> np.ndarray:
-    try:
-        from scipy.optimize import nnls
-
-        return nnls(X, y)[0]
-    except Exception:
-        w = np.linalg.lstsq(X, y, rcond=None)[0]
-        return np.clip(w, 0.0, None)
+    """三个特征权重都该是正的，截距可以为负。"""
+    return np.linalg.lstsq(X, y, rcond=None)[0]
 
 
 def main() -> None:
@@ -56,23 +54,25 @@ def main() -> None:
     pred = X @ w
 
     print("拟合权重:")
-    for name, v in zip(("base", "sqrt_game", "ln_kd"), w):
-        print(f"  {name:10s} {v:8.3f}")
+    for name, v in zip(("base", "game^0.4", "winrate^2", "kd/(1+kd)"), w):
+        print(f"  {name:12s} {v:9.2f}")
     print("\n样本内:")
     for c, p in zip(cards, pred):
         print(f"  {c['name']:12s} 预测 {p:6.1f}  真实 {c['score']:6.1f}  误差 {p - c['score']:+6.1f}")
+    print(f"\n样本内最大误差 {np.max(np.abs(pred - y)):.1f}")
+
     if len(cards) > 3:
         errs = []
         for i in range(len(cards)):
             mask = [j for j in range(len(cards)) if j != i]
             wi = fit(X[mask], y[mask])
             errs.append(float(X[i] @ wi - y[i]))
-        print(f"\n留一误差: 最大 {max(abs(e) for e in errs):.1f} / 平均 {np.mean(np.abs(errs)):.1f}")
+        print(f"留一误差: 最大 {max(abs(e) for e in errs):.1f} / 平均 {np.mean(np.abs(errs)):.1f}")
 
     if "--apply" in sys.argv:
         mp = os.path.join(HERE, "main.py")
         src = open(mp, encoding="utf-8-sig").read()
-        names = ("_DREAM_BASE", "_DREAM_SQRT_W", "_DREAM_KD_W")
+        names = ("_DREAM_BASE", "_DREAM_G_W", "_DREAM_WR_W", "_DREAM_KD_W")
         for name, v in zip(names, w):
             src = re.sub(rf"{name} = [-\d.]+", f"{name} = {v:.2f}", src)
         open(mp, "w", encoding="utf-8-sig").write(src)

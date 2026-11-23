@@ -140,18 +140,19 @@ STAT_LEAVES = (
 
 
 # ------------------------------------------------------------------ 幻梦评分
-# 幻梦（第三方起床数据卡）没公开算法。这套是拿 5 张真实卡（344.7 ACE / 217.4 S- /
-# 212.8 S- / 184.5 A+ / 178.9 A）用最小二乘拟合出来的：
-#     评分 ≈ 49.7 + 1.99*sqrt(场次) + 70.6*ln(K/D + 0.1)
-# 样本内最大误差 1.1，留一交叉验证最大误差 1.4，只有三个参数。
-# 值得强调的是胜率在数据里权重是 0：幻梦基本只看场次和 K/D（场次开方 ≈ 每翻四倍多 2 分）。
-# 早期版本用「场次饱和 + 胜率² + 场均终结 − 二次惩罚」那套，在同一张 344.7 卡上只有 241.3，
-# 而且 K/D 过 2 会倒扣、deaths=0 会算出百万级负数，已废弃。
-_DREAM_BASE = 49.66
-_DREAM_SQRT_W = 1.991
-_DREAM_KD_W = 70.62
-_DREAM_KD_EPS = 0.1
-_DREAM_KD_CAP = 20.0
+# 幻梦（第三方起床数据卡）没公开算法。这套是拿 6 张真实卡拟合出来的：
+#     评分 ≈ -47.9 + 4.22*场次^0.4 + 81.0*胜率² + 224.3*(K/D)/(1+K/D)
+# 样本：344.7(ACE) / 217.4(S-) / 213.4(S-) / 184.5(A+) / 178.9(A) / 113.2(B+)
+# 样本内最大误差 0.7，留一交叉验证最大误差 1.8。
+# 结构上：场次是幂函数（增长越来越慢），胜率是平方项，K/D 用 kd/(1+kd) 做饱和，
+# 所以不会出现「K/D 越高越掉分」或者 deaths=0 直接炸成百万的情况。
+# 早期版本用「场次饱和 + 胜率² + 场均终结 − 二次惩罚」，在 344.7 那张卡上只有 241.3，
+# 后来用 sqrt(场次)+ln(K/D) 又低估了低场次高胜率的号（69 场 81% 胜真实 113.2，只算出 43.8）。
+_DREAM_BASE = -47.89
+_DREAM_G_W = 4.22
+_DREAM_G_POW = 0.4
+_DREAM_WR_W = 81.03
+_DREAM_KD_W = 224.33
 _DREAM_MIN_GAME = 10
 
 # (分数下限, 等级)，从高到低匹配。
@@ -185,18 +186,20 @@ def _dream_rating(stats: dict) -> float | None:
     """按幻梦口径估算评分，场次不足或数据异常时返回 None。"""
     try:
         game = float(stats.get("game") or 0)
+        win = float(stats.get("win") or 0)
         kills = float(stats.get("kills") or 0)
         deaths = float(stats.get("deaths") or 0)
     except (TypeError, ValueError):
         return None
     if game < _DREAM_MIN_GAME:
         return None
+    winrate = min(max(win / game, 0.0), 1.0)
     kd = kills / deaths if deaths > 0 else kills
-    kd = min(max(kd, 0.0), _DREAM_KD_CAP)
     return (
         _DREAM_BASE
-        + _DREAM_SQRT_W * math.sqrt(game)
-        + _DREAM_KD_W * math.log(kd + _DREAM_KD_EPS)
+        + _DREAM_G_W * game**_DREAM_G_POW
+        + _DREAM_WR_W * winrate * winrate
+        + _DREAM_KD_W * (kd / (1.0 + kd))
     )
 
 
@@ -209,16 +212,15 @@ def _dream_tag(stats: dict) -> str:
 
 
 def _dream_aggregate(split: list[tuple[str, dict]]) -> str:
-    """整体评分：把各细分模式的场次和击杀死亡汇总后再套同一个公式。"""
+    """整体评分：把各细分模式的场次、胜场、击杀死亡汇总后再套同一个公式。"""
     total: dict[str, float] = {}
     for _, stats in split:
-        for key in ("game", "kills", "deaths"):
+        for key in ("game", "win", "kills", "deaths"):
             try:
                 total[key] = total.get(key, 0.0) + float(stats.get(key) or 0)
             except (TypeError, ValueError):
                 continue
-    tag = _dream_tag(total)
-    return tag
+    return _dream_tag(total)
 
 
 def _submode_label(gametype: str, key: str) -> str:
