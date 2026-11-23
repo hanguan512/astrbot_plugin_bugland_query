@@ -1596,19 +1596,8 @@ class BuglandQueryPlugin(Star):
         blocks.append({"type": "bars", "items": [
             {"label": t, "value": round(probs.get(t, 0) * 100, 1)} for t in order
         ]})
-        for t in order:
-            players = detail[t]
-            scored = [p["score"] for p in players if p.get("score") is not None]
-            avg = sum(scored) / len(scored) if scored else 0.0
-            blocks.append({"type": "section",
-                           "text": f"{t} · {len(players)} 人 · 人均 {avg:.1f}"})
-            blocks.append({"type": "rows", "items": [
-                {"label": p["name"],
-                 "value": f"{p['score']:.1f}" if p.get("score") is not None else "无数据"}
-                for p in players
-            ]})
         blocks.append({"type": "note",
-                       "text": f"{use_model} 识别的名字可能有错字，查不到战绩的按 100 分算"})
+                       "text": f"{use_model} 识别 {len(names)} 人，查不到战绩的按 100 分算"})
 
         sent = await self._send_card(
             event,
