@@ -1,4 +1,4 @@
-{
+﻿{
   "api": {
     "type": "object",
     "description": "BuGLand API 设置",
@@ -74,6 +74,37 @@
         "description": "用图片返回查询结果",
         "default": true,
         "hint": "关掉就只回文字。图片由插件自己绘制，不依赖外部渲染服务。"
+      }
+    }
+  },
+  "vl": {
+    "type": "object",
+    "description": "截图识别（Tab 列表 → 队伍胜率预测）",
+    "hint": "发一张起床战争的 Tab 列表截图问「哪队会赢」，插件会用这里的视觉模型把队伍和玩家ID读出来，再查评分算胜率。",
+    "items": {
+      "model": {
+        "type": "string",
+        "description": "视觉模型",
+        "default": "gemini-4-argon",
+        "hint": "实测同一张 Tab 图：gemini-4-argon 和 claude-haiku-5-5 又快又准，grok-4.7、qwen3.8-max 更准但慢，deepseek-v4.1-flash 也行。填服务商支持的模型 ID。"
+      },
+      "api_base": {
+        "type": "string",
+        "description": "接口地址",
+        "default": "https://opencode.ai/inference/go/v1",
+        "hint": "OpenAI 兼容的 /chat/completions 接口。留空会自动去 AstrBot 的 provider 配置里找 opencode 的。"
+      },
+      "api_key": {
+        "type": "string",
+        "description": "API Key",
+        "default": "",
+        "hint": "留空会自动复用 AstrBot 里 opencode-go 的 Key。"
+      },
+      "timeout": {
+        "type": "int",
+        "description": "识别超时（秒）",
+        "default": 120,
+        "hint": "视觉模型读图一般 10~30 秒，慢的模型要 1 分钟以上，别设太小。"
       }
     }
   }

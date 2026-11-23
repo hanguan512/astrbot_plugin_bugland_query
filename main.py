@@ -36,6 +36,23 @@ except ImportError:  # 单独调试时按顶层模块导入
         stats_blocks,
     )
 
+try:
+    from .tabpredict import (
+        DEFAULT_BASE as VL_DEFAULT_BASE,
+        DEFAULT_MODEL as VL_DEFAULT_MODEL,
+        format_report as vl_format_report,
+        ocr_tab as vl_ocr_tab,
+        team_probabilities,
+    )
+except ImportError:  # 本地调试
+    from tabpredict import (  # type: ignore[no-redef]
+        DEFAULT_BASE as VL_DEFAULT_BASE,
+        DEFAULT_MODEL as VL_DEFAULT_MODEL,
+        format_report as vl_format_report,
+        ocr_tab as vl_ocr_tab,
+        team_probabilities,
+    )
+
 PLUGIN_NAME = "astrbot_plugin_bugland_query"
 
 # 字段名 -> 图表里显示的中文
@@ -155,7 +172,7 @@ _DREAM_LNKD_W = 53.63
 _DREAM_KD_LIN = -2.3
 _DREAM_KD_EPS = 0.1
 _DREAM_KD_CAP = 20.0
-_DREAM_MIN_GAME = 10
+_DREAM_MIN_GAME = 30
 
 # (分数下限, 等级)，从高到低匹配。
 # 130 分以上是官方公示的档位，以下按档宽推算。
@@ -198,13 +215,15 @@ def _dream_rating(stats: dict) -> float | None:
     winrate = min(max(win / game, 0.0), 1.0)
     kd = kills / deaths if deaths > 0 else kills
     kd = min(max(kd, 0.0), _DREAM_KD_CAP)
-    return (
+    score = (
         _DREAM_BASE
         + _DREAM_LNG_W * math.log(game)
         + _DREAM_WR_W * winrate
         + _DREAM_LNKD_W * math.log(kd + _DREAM_KD_EPS)
         + _DREAM_KD_LIN * kd
     )
+    # 校准样本最低 69 场，30 场以下外推容易出负数，兜个 0。
+    return max(score, 0.0)
 
 
 def _dream_tag(stats: dict) -> str:
@@ -548,6 +567,16 @@ class BuglandQueryPlugin(Star):
         self.auto_bind_on_query = bool(behavior.get("auto_bind_on_query", True))
         self.render_image = bool(behavior.get("render_image", True))
 
+        vl = self.config.get("vl") or {}
+        self.vl_model = str(vl.get("model") or VL_DEFAULT_MODEL).strip()
+        self.vl_api_base = str(vl.get("api_base") or "").strip()
+        self.vl_api_key = str(vl.get("api_key") or "").strip()
+        self.vl_timeout = int(vl.get("timeout") or 120)
+        if not self.vl_api_base or not self.vl_api_key:
+            base, key = self._read_vl_source()
+            self.vl_api_base = self.vl_api_base or base
+            self.vl_api_key = self.vl_api_key or key
+
         mode_names = dict(DEFAULT_MODE_NAMES)
         extra = behavior.get("mode_names") or ""
         if isinstance(extra, dict):
@@ -578,6 +607,28 @@ class BuglandQueryPlugin(Star):
 
     # ------------------------------------------------------------------ 内部
 
+    # ------------------------------------------------------------------ 内部
+
+    def _read_vl_source(self) -> tuple[str, str]:
+        """插件没填 VL 接口时，去 AstrBot 自己的 provider 配置里找一个能读图的。"""
+        import glob
+        import os
+
+        for path in glob.glob("/root/data/cmd_config.json") + glob.glob("/AstrBot/data/cmd_config.json"):
+            try:
+                conf = json.load(open(path, encoding="utf-8-sig"))
+            except Exception:
+                continue
+            for src in conf.get("provider_sources") or []:
+                name = str(src.get("id") or src.get("provider") or "")
+                if "opencode" not in name and "gemini" not in name.lower():
+                    continue
+                base = str(src.get("api_base") or "")
+                keys = src.get("key") or []
+                key = str(keys[0]) if isinstance(keys, list) and keys else str(keys or "")
+                if base and key:
+                    return base, key
+        return VL_DEFAULT_BASE, ""
     async def _request(self, path: str, payload: dict) -> tuple[bool, Any]:
         """POST 到 BuGLand API，返回 (是否成功, 数据或错误信息)。"""
         if len(self._pool) == 0:
@@ -1460,6 +1511,82 @@ class BuglandQueryPlugin(Star):
         if sent:
             return "已经把年度总结画成图片发给用户了。用一两句话说说亮点即可。"
         return f"「{target}」的 2025 年度总结：\n{self._render(data)}"
+
+    @filter.llm_tool(name="bugland_predict_teams")
+    async def bugland_predict_teams(self, event: AstrMessageEvent, model: str = "") -> str:
+        """识别截图里的布吉岛起床战争 Tab 玩家列表，查每个人的起床评分，估算各队胜率。
+
+        当用户发来一张起床战争的 Tab 列表截图，并问「哪队会赢 / 哪队胜率高 / 谁能赢 / 帮我分析下」时调用。
+        工具会先用视觉模型把队伍和玩家ID读出来，再逐个查起床战绩、套幻梦评分，最后按战力算胜率。
+
+        返回里已经有每队人数、人均评分、最高分和胜率，回答时直接引用这些数字：
+        先说哪队胜率最高，再给支撑（人均评分、大腿是谁、哪队有拖后腿的），
+        最后提一句识别到的名字可能有错字，查不到数据的按新人处理。
+
+        Args:
+            model(string): 可选，临时换一个视觉模型，比如 gemini-4-argon、claude-haiku-5-5、grok-4.7。留空用插件设置里配置的那个。
+        """
+        images = [c for c in (event.message_obj.message or []) if isinstance(c, Image)]
+        if not images:
+            return "这条消息里没找到图片。让用户直接把起床战争的 Tab 列表截图发过来，别转发、别压缩。"
+        img = images[-1]
+        try:
+            path = await img.convert_to_file_path()
+            with open(path, "rb") as f:
+                raw = f.read()
+        except Exception as e:  # noqa: BLE001
+            return f"读取图片失败：{e}"
+
+        use_model = (model or "").strip() or self.vl_model
+        if not self.vl_api_key:
+            return "还没配视觉模型接口。让管理员在插件设置的「截图识别」里填 API 地址和 Key。"
+        try:
+            teams = await vl_ocr_tab(
+                raw,
+                api_base=self.vl_api_base or VL_DEFAULT_BASE,
+                api_key=self.vl_api_key,
+                model=use_model,
+                timeout=self.vl_timeout,
+                extra_headers={"x-opencode-session": "sess_astrbot_bugland_tab"},
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"识别截图失败（{use_model}）：{e}"
+        if not teams:
+            return f"识别出来是空的（{use_model}），可能图太糊或者不是 Tab 列表截图。"
+
+        names = [n for v in teams.values() for n in v]
+        if len(names) > 60:
+            return f"识别到 {len(names)} 个名字，太多了，不像一局起床战争，先确认一下图片。"
+
+        sem = asyncio.Semaphore(4)
+
+        async def fetch(name: str) -> dict:
+            async with sem:
+                ok, data = await self._request("/gamestats", {"username": name, "gametype": "bedwars"})
+            rec = {"name": name, "score": None}
+            if not ok or not data:
+                return rec
+            split = _split_submodes(data, "bedwars")
+            total = {"game": 0, "win": 0, "kills": 0, "deaths": 0}
+            for _, st in split:
+                for k in total:
+                    try:
+                        total[k] += float(st.get(k) or 0)
+                    except (TypeError, ValueError):
+                        continue
+            score = _dream_rating(total)
+            if score is not None:
+                rec["score"] = score
+                rec["level"] = _dream_level(score)
+            return rec
+
+        results = await asyncio.gather(*(fetch(n) for n in names))
+        lookup = {r["name"]: r for r in results}
+        detail = {t: [lookup[n] for n in v] for t, v in teams.items()}
+
+        probs, strength = team_probabilities(detail)
+        report = vl_format_report(detail, use_model, probs, strength)
+        return report[: self.max_chars * 2]
 
     @filter.llm_tool(name="bugland_card")
     async def bugland_card(self, event: AstrMessageEvent, spec: str) -> str:
