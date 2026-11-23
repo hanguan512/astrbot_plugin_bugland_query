@@ -1,0 +1,80 @@
+{
+  "api": {
+    "type": "object",
+    "description": "BuGLand API 设置",
+    "hint": "接口文档: https://mcbjd.net/docs/api/bugland-api",
+    "items": {
+      "token": {
+        "type": "string",
+        "description": "API Token",
+        "default": "",
+        "hint": "在布吉岛游戏大厅输入 /openapi 申领（等级 > 20）。填在这里会自动加 Bearer 前缀。"
+      },
+      "token_pool": {
+        "type": "text",
+        "description": "Token 池（每行一个）",
+        "default": "",
+        "hint": "多个账号的 Token 一行一个。谁到限额就自动换下一个，全满了就排队等最早恢复的那个。单 token 用户留空就行，上面那个照常用。"
+      },
+      "token_limit_per_minute": {
+        "type": "int",
+        "description": "每个 Token 每分钟限额",
+        "default": 30,
+        "hint": "普通玩家 Token 是 30 次/分，开发者 Token 是 200 次/分。按最低的那个填，填大了会撞 429。"
+      },
+      "api_base": {
+        "type": "string",
+        "description": "接口地址",
+        "default": "https://api.mcbjd.net/v2",
+        "hint": "一般不用改。"
+      },
+      "timeout": {
+        "type": "int",
+        "description": "请求超时（秒）",
+        "default": 20
+      },
+      "max_result_chars": {
+        "type": "int",
+        "description": "返回给模型的最大字符数",
+        "default": 3000,
+        "hint": "数据太长会被截断，避免把上下文塞爆。"
+      }
+    }
+  },
+  "behavior": {
+    "type": "object",
+    "description": "行为设置",
+    "items": {
+      "allow_query_others": {
+        "type": "bool",
+        "description": "允许查询他人数据",
+        "default": true,
+        "hint": "关闭后，每人只能查自己绑定的账号。"
+      },
+      "cache_ttl": {
+        "type": "int",
+        "description": "查询缓存秒数",
+        "default": 30,
+        "hint": "同样的查询在缓存时间内直接复用，省 Token 配额。填 0 关闭缓存。"
+      },
+      "auto_bind_on_query": {
+        "type": "bool",
+        "description": "查询时自动绑定",
+        "default": true,
+        "hint": "用户直接说「查一下我的战绩」但没绑定时，如果给了昵称就顺手绑定。"
+      },
+      "mode_names": {
+        "type": "text",
+        "description": "对局模式代码中文名",
+        "default": "BWXP32=经验起床四队八人（无限火力48）",
+        "hint": "一行一个，格式「代码=中文名」，例如 BWXP32=经验起床四队八人（无限火力48）。用来把对局记录里的模式代码翻译成人话。"
+      },
+      "render_image": {
+        "type": "bool",
+        "description": "用图片返回查询结果",
+        "default": true,
+        "hint": "关掉就只回文字。图片由插件自己绘制，不依赖外部渲染服务。"
+      }
+    }
+  }
+}
