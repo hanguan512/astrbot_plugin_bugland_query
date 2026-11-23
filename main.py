@@ -1586,6 +1586,39 @@ class BuglandQueryPlugin(Star):
 
         probs, strength = team_probabilities(detail)
         report = vl_format_report(detail, use_model, probs, strength)
+
+        order = sorted(detail, key=lambda t: probs.get(t, 0), reverse=True)
+        blocks: list[dict] = []
+        if order:
+            top = order[0]
+            blocks.append({"type": "hero", "label": f"{top}胜率",
+                           "value": f"{probs.get(top, 0) * 100:.0f}", "unit": "%"})
+        blocks.append({"type": "bars", "items": [
+            {"label": t, "value": round(probs.get(t, 0) * 100, 1)} for t in order
+        ]})
+        for t in order:
+            players = detail[t]
+            scored = [p["score"] for p in players if p.get("score") is not None]
+            avg = sum(scored) / len(scored) if scored else 0.0
+            blocks.append({"type": "section",
+                           "text": f"{t} · {len(players)} 人 · 人均 {avg:.1f}"})
+            blocks.append({"type": "rows", "items": [
+                {"label": p["name"],
+                 "value": f"{p['score']:.1f}" if p.get("score") is not None else "无数据"}
+                for p in players
+            ]})
+        blocks.append({"type": "note",
+                       "text": f"{use_model} 识别的名字可能有错字，查不到战绩的按 100 分算"})
+
+        sent = await self._send_card(
+            event,
+            "起床战争 · 队伍胜率预测",
+            f"{len(names)} 人 · {use_model}",
+            blocks,
+            "评分按幻梦口径估算，胜率由评分加权算出",
+        )
+        if sent:
+            report += "\n\n（已经把胜率卡片图发过去了，回复时不用再念明细，挑重点说就行）"
         return report[: self.max_chars * 2]
 
     @filter.llm_tool(name="bugland_card")
