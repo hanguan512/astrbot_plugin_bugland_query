@@ -1,8 +1,79 @@
 [
-  {"name": "喜欢上了宇", "game": 10193, "win": 7757, "kills": 37953, "deaths": 10296, "final_kills": 23129, "bed_lose": 5191, "score": 344.7},
-  {"name": "天蓝", "game": 3825, "win": 1145, "kills": 10459, "deaths": 5944, "final_kills": 5037, "bed_lose": 712, "score": 217.4},
-  {"name": "我***零", "game": 5682, "win": 1862, "kills": 12619, "deaths": 11250, "final_kills": 6543, "bed_lose": 2886, "score": 212.8},
-  {"name": "红*", "game": 548, "win": 158, "kills": 2546, "deaths": 750, "final_kills": 1008, "bed_lose": 99, "score": 184.5},
-  {"name": "玲星光珑X", "game": 7489, "win": 2417, "kills": 7908, "deaths": 17921, "final_kills": 3594, "bed_lose": 1302, "score": 178.9},
-  {"name": "瀚观XRP", "game": 69, "win": 56, "kills": 34, "deaths": 56, "final_kills": 15, "bed_lose": 0, "score": 113.2}
+  {
+    "name": "喜欢上了宇",
+    "game": 10193,
+    "win": 7757,
+    "kills": 37953,
+    "deaths": 10296,
+    "final_kills": 23129,
+    "bed_lose": 5191,
+    "score": 344.7,
+    "final_deaths": 2115
+  },
+  {
+    "name": "天蓝",
+    "game": 3825,
+    "win": 1145,
+    "kills": 10459,
+    "deaths": 5944,
+    "final_kills": 5037,
+    "bed_lose": 712,
+    "score": 217.4,
+    "final_deaths": 2389
+  },
+  {
+    "name": "我***零",
+    "game": 5682,
+    "win": 1862,
+    "kills": 12619,
+    "deaths": 11250,
+    "final_kills": 6543,
+    "bed_lose": 2886,
+    "score": 212.8,
+    "final_deaths": 3114
+  },
+  {
+    "name": "红*",
+    "game": 548,
+    "win": 158,
+    "kills": 2546,
+    "deaths": 750,
+    "final_kills": 1008,
+    "bed_lose": 99,
+    "score": 184.5,
+    "final_deaths": 378
+  },
+  {
+    "name": "玲星光珑X",
+    "game": 7489,
+    "win": 2417,
+    "kills": 7908,
+    "deaths": 17921,
+    "final_kills": 3594,
+    "bed_lose": 1302,
+    "score": 178.9,
+    "final_deaths": 4095
+  },
+  {
+    "name": "瀚观XRP",
+    "game": 69,
+    "win": 56,
+    "kills": 34,
+    "deaths": 56,
+    "final_kills": 15,
+    "bed_lose": 0,
+    "score": 113.2,
+    "final_deaths": 17
+  },
+  {
+    "name": "成天乐",
+    "game": 6053,
+    "win": 5624,
+    "kills": 22687,
+    "deaths": 4912,
+    "final_kills": 16330,
+    "final_deaths": 358,
+    "bed_lose": 2026,
+    "score": 366.2
+  }
 ]

@@ -140,19 +140,21 @@ STAT_LEAVES = (
 
 
 # ------------------------------------------------------------------ 幻梦评分
-# 幻梦（第三方起床数据卡）没公开算法。这套是拿 6 张真实卡拟合出来的：
-#     评分 ≈ -47.9 + 4.22*场次^0.4 + 81.0*胜率² + 224.3*(K/D)/(1+K/D)
-# 样本：344.7(ACE) / 217.4(S-) / 213.4(S-) / 184.5(A+) / 178.9(A) / 113.2(B+)
-# 样本内最大误差 0.7，留一交叉验证最大误差 1.8。
-# 结构上：场次是幂函数（增长越来越慢），胜率是平方项，K/D 用 kd/(1+kd) 做饱和，
-# 所以不会出现「K/D 越高越掉分」或者 deaths=0 直接炸成百万的情况。
-# 早期版本用「场次饱和 + 胜率² + 场均终结 − 二次惩罚」，在 344.7 那张卡上只有 241.3，
-# 后来用 sqrt(场次)+ln(K/D) 又低估了低场次高胜率的号（69 场 81% 胜真实 113.2，只算出 43.8）。
-_DREAM_BASE = -47.89
-_DREAM_G_W = 4.22
-_DREAM_G_POW = 0.4
-_DREAM_WR_W = 81.03
-_DREAM_KD_W = 224.33
+# 幻梦（第三方起床数据卡）没公开算法。这套是拿 7 张真实卡拟合出来的：
+#     评分 ≈ -115.5 + 31.46*ln(场次) + 138.98*胜率 + 49.69*ln(K/D + 0.1)
+# 样本：366.2(ACE) / 344.7(ACE) / 217.4(S-) / 212.8(S-) / 184.5(A+) / 178.9(A) / 113.2(B+)
+# 样本内最大误差 2.1，留一交叉验证最大误差 3.8，只有三个特征。
+# 演变过程（都是被真实卡推翻的）：
+#   v1 场次饱和 + 胜率² + 场均终结 − 二次惩罚：K/D 过 2 会倒扣，deaths=0 炸成百万级，
+#      344.7 那张卡只算出 241.3；
+#   v2 sqrt(场次) + ln(K/D)：低估高胜率低场次号，69 场 81% 胜真实 113.2 只算出 43.8；
+#   v3 现在这版：场次取对数、胜率线性、K/D 取对数加 0.1 平滑，七个样本都对得上。
+_DREAM_BASE = -115.55
+_DREAM_LNG_W = 31.46
+_DREAM_WR_W = 138.98
+_DREAM_LNKD_W = 49.69
+_DREAM_KD_EPS = 0.1
+_DREAM_KD_CAP = 30.0
 _DREAM_MIN_GAME = 10
 
 # (分数下限, 等级)，从高到低匹配。
@@ -195,11 +197,12 @@ def _dream_rating(stats: dict) -> float | None:
         return None
     winrate = min(max(win / game, 0.0), 1.0)
     kd = kills / deaths if deaths > 0 else kills
+    kd = min(max(kd, 0.0), _DREAM_KD_CAP)
     return (
         _DREAM_BASE
-        + _DREAM_G_W * game**_DREAM_G_POW
-        + _DREAM_WR_W * winrate * winrate
-        + _DREAM_KD_W * (kd / (1.0 + kd))
+        + _DREAM_LNG_W * math.log(game)
+        + _DREAM_WR_W * winrate
+        + _DREAM_LNKD_W * math.log(kd + _DREAM_KD_EPS)
     )
 
 
