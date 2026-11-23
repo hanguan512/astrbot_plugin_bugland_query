@@ -5,11 +5,12 @@
     python fit_dream.py --apply    # 顺便把权重写回 main.py
 
 cards.json 每条就是一张真实幻梦卡的原始数字：
-    {"name": "喜欢上了宇", "game": 10193, "win": 7757, "kills": 37953,
-     "deaths": 10296, "final_kills": 23129, "bed_lose": 5191, "score": 344.7}
+    {"name": "喜欢上了宇", "game": 10193, "kills": 37953, "deaths": 10296, "score": 344.7}
 
-特征和 main._dream_rating 完全一致（先按先验做贝叶斯收缩，再线性加权），
-拟合用非负最小二乘，保证每个特征单调。
+模型结构（和 main._dream_rating 一致）：
+    评分 = base + sqrt_w * sqrt(场次) + kd_w * ln(K/D + eps)
+
+拟合用非负最小二乘，保证权重为正，评分对场次和 K/D 单调。
 """
 
 from __future__ import annotations
@@ -23,38 +24,20 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-
-# 和 main.py 里的先验保持一致
-PN = 24.0
-PWR = 0.35
-PKD = 1.20
-PAF = 0.12
-PBD = 0.15
+EPS = 0.1         # ln(K/D + eps) 里的 eps，网格搜过 0.02~1.0，0.1 最优
+KD_CAP = 20.0
 
 
 def features(card: dict) -> list[float]:
-    g = float(card["game"])
-    win = float(card["win"])
-    k = float(card["kills"])
-    d = float(card["deaths"])
-    fk = float(card["final_kills"])
-    bed = float(card.get("bed_lose") or 0)
-    wr = (win + PN * PWR) / (g + PN)
-    kd = min((k + PN * PKD) / (d + PN), 60.0)
-    af = (fk + PN * PAF) / (g + PN)
-    bd = (bed + PN * PBD) / (g + PN)
-    return [
-        1.0,
-        math.log1p(g / 40.0),
-        wr - PWR,
-        math.log(kd / PKD),
-        af - PAF,
-        bd - PBD,
-    ]
+    game = float(card["game"])
+    kills = float(card.get("kills") or 0)
+    deaths = float(card.get("deaths") or 0)
+    kd = kills / deaths if deaths > 0 else kills
+    kd = min(max(kd, 0.0), KD_CAP)
+    return [1.0, math.sqrt(game), math.log(kd + EPS)]
 
 
 def fit(X: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """非负最小二乘，权重为正是单调性的前提。"""
     try:
         from scipy.optimize import nnls
 
@@ -71,11 +54,10 @@ def main() -> None:
     y = np.array([float(c["score"]) for c in cards])
     w = fit(X, y)
     pred = X @ w
+
     print("拟合权重:")
-    for name, v in zip(
-        ("base", "vol", "winrate", "kd", "avg_final", "bed_ratio"), w
-    ):
-        print(f"  {name:10s} {v:8.2f}")
+    for name, v in zip(("base", "sqrt_game", "ln_kd"), w):
+        print(f"  {name:10s} {v:8.3f}")
     print("\n样本内:")
     for c, p in zip(cards, pred):
         print(f"  {c['name']:12s} 预测 {p:6.1f}  真实 {c['score']:6.1f}  误差 {p - c['score']:+6.1f}")
@@ -90,16 +72,9 @@ def main() -> None:
     if "--apply" in sys.argv:
         mp = os.path.join(HERE, "main.py")
         src = open(mp, encoding="utf-8-sig").read()
-        names = (
-            "_DREAM_BASE",
-            "_DREAM_VOL_W",
-            "_DREAM_WR_W",
-            "_DREAM_KD_W",
-            "_DREAM_AF_W",
-            "_DREAM_BD_W",
-        )
+        names = ("_DREAM_BASE", "_DREAM_SQRT_W", "_DREAM_KD_W")
         for name, v in zip(names, w):
-            src = re.sub(rf"{name} = [-\d.]+", f"{name} = {v:.1f}", src)
+            src = re.sub(rf"{name} = [-\d.]+", f"{name} = {v:.2f}", src)
         open(mp, "w", encoding="utf-8-sig").write(src)
         print("\n已写回 main.py")
 

@@ -1,4 +1,4 @@
-"""布吉岛查询插件
+﻿"""布吉岛查询插件
 
 通过 BuGLand API (https://api.mcbjd.net/v2) 查询布吉岛服务器数据。
 所有功能以 LLM 工具形式提供，由模型根据用户语义自行选择调用。
@@ -140,34 +140,19 @@ STAT_LEAVES = (
 
 
 # ------------------------------------------------------------------ 幻梦评分
-# 幻梦（第三方起床数据卡）没有公开算法，这套是按真实评分卡拟合的估算式，只作参考。
-# v2 修了 v1 的几个结构性问题：
-#   1) 字段名写错（bed_destory 不存在，接口给的是 bed_lose），破床项一直恒等于 0；
-#   2) K/D 用 -3.85*kd² 二次惩罚，kd 超过 2 就开始掉分，kd=8 直接 -150 分；
-#   3) deaths=0 时 K/D 取 kills，1000 杀 0 死会被算成 -385 万；
-#   4) 样本量不收缩，1 场 1 胜能打到 86 分，比 100 场 50% 胜 K/D1.0（60 分）还高；
-#   5) 场次项 k=5500 太钝，100 场只值 2.7 分。
-# 权重用三张真实卡拉最小二乘解出来的：
-#   喜欢上了宇 10193场 76%胜 K/D3.69 场均终结2.27 破床比0.51 = 344.7(ACE)
-#   玲星光珑X  7489场 32%胜 K/D0.44 场均终结0.48 破床比0.17 = 178.9(A)
-#   天蓝       3825场 30%胜 K/D1.76 场均终结1.32 破床比0.19 = 217.4(S-)
-# 旧式在第一张上只有 241.3 分（少 103），卡在胜率和 K/D 上；三张卡残差都在 1.5 分内。
-# 现在：特征先按先验做贝叶斯收缩（伪计数 24），再线性加权，全部单调有界，
-# 场次 <10 直接不评，返回空串由调用方标「样本不足」。
-_DREAM_PRIOR_N = 24.0
-_DREAM_PRIOR_WR = 0.35
-_DREAM_PRIOR_KD = 1.20
-_DREAM_PRIOR_AF = 0.12
-_DREAM_PRIOR_BD = 0.15
+# 幻梦（第三方起床数据卡）没公开算法。这套是拿 5 张真实卡（344.7 ACE / 217.4 S- /
+# 212.8 S- / 184.5 A+ / 178.9 A）用最小二乘拟合出来的：
+#     评分 ≈ 49.7 + 1.99*sqrt(场次) + 70.6*ln(K/D + 0.1)
+# 样本内最大误差 1.1，留一交叉验证最大误差 1.4，只有三个参数。
+# 值得强调的是胜率在数据里权重是 0：幻梦基本只看场次和 K/D（场次开方 ≈ 每翻四倍多 2 分）。
+# 早期版本用「场次饱和 + 胜率² + 场均终结 − 二次惩罚」那套，在同一张 344.7 卡上只有 241.3，
+# 而且 K/D 过 2 会倒扣、deaths=0 会算出百万级负数，已废弃。
+_DREAM_BASE = 49.66
+_DREAM_SQRT_W = 1.991
+_DREAM_KD_W = 70.62
+_DREAM_KD_EPS = 0.1
+_DREAM_KD_CAP = 20.0
 _DREAM_MIN_GAME = 10
-
-_DREAM_BASE = 77.9
-_DREAM_VOL_W = 18.6
-_DREAM_VOL_SCALE = 40.0
-_DREAM_WR_W = 86.3
-_DREAM_KD_W = 11.7
-_DREAM_AF_W = 45.4
-_DREAM_BD_W = 48.8
 
 # (分数下限, 等级)，从高到低匹配。
 # 130 分以上是官方公示的档位，以下按档宽推算。
@@ -196,40 +181,23 @@ def _dream_level(score: float) -> str:
     return "F"
 
 
-def _shrink(total: float, game: float, prior: float) -> float:
-    """向先验收缩，场次越少越接近 prior，避免小样本刷分。"""
-    return (total + _DREAM_PRIOR_N * prior) / (game + _DREAM_PRIOR_N)
-
-
 def _dream_rating(stats: dict) -> float | None:
     """按幻梦口径估算评分，场次不足或数据异常时返回 None。"""
     try:
         game = float(stats.get("game") or 0)
-        win = float(stats.get("win") or 0)
         kills = float(stats.get("kills") or 0)
         deaths = float(stats.get("deaths") or 0)
-        final_kills = float(stats.get("final_kills") or 0)
-        bed = float(stats.get("bed_lose") or 0)
     except (TypeError, ValueError):
         return None
     if game < _DREAM_MIN_GAME:
         return None
-
-    winrate = _shrink(win, game, _DREAM_PRIOR_WR)
-    kd = (kills + _DREAM_PRIOR_N * _DREAM_PRIOR_KD) / (deaths + _DREAM_PRIOR_N)
-    kd = min(kd, 60.0)
-    avg_final = _shrink(final_kills, game, _DREAM_PRIOR_AF)
-    bed_ratio = _shrink(bed, game, _DREAM_PRIOR_BD)
-
-    score = (
+    kd = kills / deaths if deaths > 0 else kills
+    kd = min(max(kd, 0.0), _DREAM_KD_CAP)
+    return (
         _DREAM_BASE
-        + _DREAM_VOL_W * math.log1p(game / _DREAM_VOL_SCALE)
-        + _DREAM_WR_W * (winrate - _DREAM_PRIOR_WR)
-        + _DREAM_KD_W * math.log(kd / _DREAM_PRIOR_KD)
-        + _DREAM_AF_W * (avg_final - _DREAM_PRIOR_AF)
-        + _DREAM_BD_W * (bed_ratio - _DREAM_PRIOR_BD)
+        + _DREAM_SQRT_W * math.sqrt(game)
+        + _DREAM_KD_W * math.log(kd + _DREAM_KD_EPS)
     )
-    return score
 
 
 def _dream_tag(stats: dict) -> str:
@@ -241,25 +209,16 @@ def _dream_tag(stats: dict) -> str:
 
 
 def _dream_aggregate(split: list[tuple[str, dict]]) -> str:
-    """整体评分：按场次加权平均各细分模式的评分，样本不足的模式不参与。"""
-    total_score = 0.0
-    total_game = 0.0
+    """整体评分：把各细分模式的场次和击杀死亡汇总后再套同一个公式。"""
+    total: dict[str, float] = {}
     for _, stats in split:
-        score = _dream_rating(stats)
-        if score is None:
-            continue
-        try:
-            game = float(stats.get("game") or 0)
-        except (TypeError, ValueError):
-            continue
-        if game <= 0:
-            continue
-        total_score += score * game
-        total_game += game
-    if total_game <= 0:
-        return ""
-    score = total_score / total_game
-    return f"{score:.1f}({_dream_level(score)})"
+        for key in ("game", "kills", "deaths"):
+            try:
+                total[key] = total.get(key, 0.0) + float(stats.get(key) or 0)
+            except (TypeError, ValueError):
+                continue
+    tag = _dream_tag(total)
+    return tag
 
 
 def _submode_label(gametype: str, key: str) -> str:
